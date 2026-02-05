@@ -1,8 +1,17 @@
 import streamlit as st
 import google.generativeai as genai
 
-# --- НАСТРОЙКИ (Твой ключ) ---
-GOOGLE_API_KEY = "ВСТАВЬ_СЮДА_СВОЙ_КЛЮЧ"
+# --- БЕЗОПАСНАЯ АВТОРИЗАЦИЯ ---
+# Проверяем, есть ли ключ в секретах сервера, если нет — просим ввести вручную
+if "GOOGLE_API_KEY" in st.secrets:
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+else:
+    GOOGLE_API_KEY = st.text_input("🔐 Введи свой Google API Key:", type="password")
+
+if not GOOGLE_API_KEY:
+    st.info("👈 Введи ключ, чтобы активировать ИИ-мозг.")
+    st.stop()
+
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- УМНЫЙ БЛОК: АВТО-ПОИСК МОДЕЛИ ---
