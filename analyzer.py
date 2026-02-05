@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 
 # --- НАСТРОЙКИ (Твой ключ) ---
-GOOGLE_API_KEY = insert key
+GOOGLE_API_KEY = .env
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- УМНЫЙ БЛОК: АВТО-ПОИСК МОДЕЛИ ---
