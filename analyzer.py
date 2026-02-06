@@ -9,12 +9,12 @@ else:
     GOOGLE_API_KEY = st.text_input("🔐 Введи свой Google API Key:", type="password")
 
 if not GOOGLE_API_KEY:
-    st.info("👈 Введи ключ, чтобы запустить систему.")
+    st.info("👈 Введи ключ, чтобы начать диалог.")
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- 2. НАСТРОЙКА МОДЕЛИ ---
+# Авто-выбор модели
 def get_best_model():
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -23,34 +23,80 @@ def get_best_model():
     except:
         return "gemini-pro"
 
-MODEL_NAME = get_best_model()
-model = genai.GenerativeModel(MODEL_NAME)
+model = genai.GenerativeModel(get_best_model())
 
-# --- 3. ИНТЕРФЕЙС ---
-st.set_page_config(page_title="Silent Bridge AI", page_icon="🌉")
-st.title("🌉 Silent Bridge: AI Analytics")
+# --- 2. ИНТЕРФЕЙС ЧАТА ---
+st.set_page_config(page_title="Silent Bridge Chat", page_icon="🌉")
+st.title("🌉 Silent Bridge: Диалог")
 
-def analyze_with_ai(text):
-    final_prompt = ANALYSIS_PROMPT.format(text=text)
-    # 🔥 БЛОК БЕССТРАШИЯ
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-    try:
-        response = model.generate_content(final_prompt, safety_settings=safety_settings)
-        return response.text
-    except Exception as e:
-        return f"⚠️ Ошибка: {e}"
+# Инициализация памяти (истории переписки)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    # Первое сообщение от бота
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": "Привет! Я готов к работе. Отправь мне текст выписки или анализов, и я разберу их."
+    })
 
-text_input = st.text_area("📄 Вставьте текст заключения:", height=200)
+# Отображаем всю историю на экране
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-if st.button("🚀 Разобрать"):
-    if not text_input:
-        st.warning("⚠️ Нет текста!")
-    else:
-        with st.spinner("⏳ Анализирую..."):
-            res = analyze_with_ai(text_input)
-            st.markdown(res)
+# --- 3. ОБРАБОТКА НОВОГО СООБЩЕНИЯ ---
+if user_input := st.chat_input("Напиши сообщение..."):
+    # 1. Показываем сообщение пользователя
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # 2. Формируем ответ
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        
+        try:
+            # ЛОГИКА: Если это ПЕРВОЕ сообщение пользователя (длинное), добавляем к нему нашу ИНСТРУКЦИЮ.
+            # Если это второе, третье и т.д. — просто отправляем как есть.
+            
+            # Считаем сообщения пользователя в истории
+            user_msg_count = sum(1 for m in st.session_state.messages if m["role"] == "user")
+            
+            if user_msg_count == 1:
+                # Это первый заход -> Оборачиваем в твой мощный Промпт
+                final_text_to_send = ANALYSIS_PROMPT.format(text=user_input)
+            else:
+                # Это просто вопрос -> Шлем как есть
+                final_text_to_send = user_input
+
+            # Собираем историю для Google Gemini (чтобы он помнил контекст)
+            chat_history = []
+            # Берем всё, кроме последнего (его мы шлем отдельно)
+            for msg in st.session_state.messages[:-1]:
+                role = "user" if msg["role"] == "user" else "model"
+                # Пропускаем приветствие бота, чтобы не сбивать модель
+                if msg["content"].startswith("Привет! Я готов"):
+                    continue
+                chat_history.append({"role": role, "parts": [msg["content"]]})
+
+            # Запускаем чат с историей
+            chat = model.start_chat(history=chat_history)
+            
+            # Настройки безопасности (Бесстрашие)
+            safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
+
+            # Получаем ответ
+            response = chat.send_message(final_text_to_send, safety_settings=safety_settings)
+            
+            # Показываем ответ
+            message_placeholder.markdown(response.text)
+            
+            # Сохраняем ответ бота в историю
+            st.session_state.messages.append({"role": "assistant", "content": response.text})
+
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
