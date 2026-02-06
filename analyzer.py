@@ -4,6 +4,22 @@ import PyPDF2
 from prompts import ANALYSIS_PROMPT
 import tempfile
 import time
+
+if response.status_code == 200:
+    st.info("Файлы ушли нейробиологу. Ждем результат...")
+    
+    # Допустим, API возвращает task_id. Если нет, просто опрашивай эндпоинт результата.
+    finished = False
+    while not finished:
+        result_check = requests.get("http://127.0.0.1:8000/get_result") 
+        data = result_check.json()
+        
+        if data.get("status") == "completed":
+            st.success("Анализ готов!")
+            st.write(data.get("analysis_result"))
+            finished = True
+        else:
+            time.sleep(5) # Ждем 5 секунд перед новой проверкой
 import os
 
 # --- 1. НАСТРОЙКИ И АВТОРИЗАЦИЯ ---
