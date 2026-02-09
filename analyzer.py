@@ -1,120 +1,169 @@
 import streamlit as st
 import google.generativeai as genai
-import PyPDF2
-from prompts import ANALYSIS_PROMPT
-import tempfile
+import requests
 import time
-import os
-import requests  # Добавили для связи с API
+import uuid
 
-# --- 1. НАСТРОЙКИ И АВТОРИЗАЦИЯ ---
-st.set_page_config(page_title="Silent Bridge AI", page_icon="🧬", layout="wide")
+# ---------------- CONFIG ----------------
+
+st.set_page_config(
+    page_title="Silent Bridge AI",
+    page_icon="🧬",
+    layout="wide"
+)
+
+# ---------------- API KEY ----------------
 
 if "GOOGLE_API_KEY" in st.secrets:
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 else:
-    GOOGLE_API_KEY = st.text_input("🔐 Введи API Key:", type="password")
+    GOOGLE_API_KEY = st.text_input("🔐 Enter Google API Key", type="password")
 
 if not GOOGLE_API_KEY:
-    st.warning("👈 Нужен ключ для запуска.")
+    st.warning("Enter API key to continue")
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# ---------------- MODEL AUTO SELECT ----------------
+
 def get_best_model():
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        flash_model = next((m for m in models if 'flash' in m), None)
-        return flash_model if flash_model else "models/gemini-2.0-flash"
+        models = [
+            m.name for m in genai.list_models()
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        flash = next((m for m in models if "flash" in m.lower()), None)
+        return flash if flash else "models/gemini-2.0-flash"
     except:
         return "models/gemini-2.0-flash"
 
-selected_model = get_best_model()
-st.sidebar.caption(f"🤖 Модель: {selected_model}")
-model = genai.GenerativeModel(selected_model)
+MODEL_NAME = get_best_model()
+st.sidebar.caption(f"Model: {MODEL_NAME}")
 
-# --- 2. ФУНКЦИИ ОБРАБОТКИ ---
-def extract_text_from_pdf(uploaded_file):
-    try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-        return text
-    except Exception as e:
-        return f"Ошибка чтения PDF: {e}"
+# ---------------- BACKEND CONFIG ----------------
 
-# --- 3. ИНТЕРФЕЙС ---
-st.title("🧬 Silent Bridge: AI-Консилиум")
-st.markdown("Загрузите выписки (PDF) или **видео**. Данные будут отправлены нейробиологу через API.")
+API_BASE = "http://127.0.0.1:8000"
+
+# ---------------- UI ----------------
+
+st.title("🧬 Silent Bridge — Case Analysis")
 
 with st.sidebar:
-    st.header("📂 Материалы дела")
+    st.header("Case Files")
+
     uploaded_files = st.file_uploader(
-        "Загрузить файлы", 
-        type=['pdf', 'txt', 'png', 'jpg', 'jpeg', 'mp4', 'mov', 'avi'], 
+        "Upload documents / video",
+        type=["pdf", "txt", "png", "jpg", "jpeg", "mp4", "mov", "avi"],
         accept_multiple_files=True
     )
-    if st.button("🗑️ Сбросить диалог"):
+
+    if st.button("Reset Chat"):
         st.session_state.messages = []
+        st.session_state.job_id = None
         st.rerun()
 
-# --- 4. ЛОГИКА ЧАТА И API ---
+# ---------------- SESSION ----------------
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Отображение истории
+if "job_id" not in st.session_state:
+    st.session_state.job_id = None
+
+# ---------------- CHAT HISTORY ----------------
+
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if user_input := st.chat_input("Напиши вопрос (например: 'Сделай разбор видео')..."):
-    st.session_state.messages.append({"role": "user", "content": user_input})
+# ---------------- MAIN CHAT ----------------
+
+user_input = st.chat_input("Ask about case / video / documents")
+
+if user_input:
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_input
+    })
+
     with st.chat_message("user"):
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        
+
+        placeholder = st.empty()
+
         try:
-            # 1. Отправка файлов на API
-            st.info("📡 Передача данных нейробиологу (API)...")
-            
-            # Подготовка файлов для корректной отправки всех видео сразу
-            files_to_send = []
+            # ---------- PREP FILES ----------
+            files_payload = []
+
             if uploaded_files:
                 for f in uploaded_files:
-                    files_to_send.append(('files', (f.name, f.getvalue(), f.type)))
+                    files_payload.append(
+                        ("files", (f.name, f.getvalue(), f.type))
+                    )
 
-            # Твой API эндпоинт (проверь порт!)
-            api_url = "http://127.0.0.1:8000/analyze"
-            response = requests.post(api_url, files=files_to_send, data={"prompt": user_input})
+            # ---------- CREATE JOB ----------
+            job_id = str(uuid.uuid4())
+            st.session_state.job_id = job_id
 
-            if response.status_code == 200:
-                # 2. Опрос результата (Polling)
-                finished = False
-                max_retries = 30  # Ждем максимум 2.5 минуты
-                retries = 0
-                
-                while not finished and retries < max_retries:
-                    with st.spinner("🧠 Нейробиолог изучает данные..."):
-                        time.sleep(5)
-                        # Запрашиваем готовность
-                        res = requests.get("http://127.0.0.1:8000/get_result")
-                        data = res.json()
-                        
-                        if data.get("status") == "completed":
-                            final_result = data.get("analysis_result")
-                            message_placeholder.markdown(final_result)
-                            st.session_state.messages.append({"role": "assistant", "content": final_result})
-                            finished = True
-                        else:
-                            retries += 1
-                
-                if not finished:
-                    st.error("Таймаут: Бэкенд слишком долго думает.")
-            else:
-                st.error(f"Ошибка API: {response.status_code}. Проверь, запущен ли сервер бэкенда.")
-                
+            st.info("Sending case to backend...")
+
+            res = requests.post(
+                f"{API_BASE}/analyze",
+                files=files_payload,
+                data={
+                    "prompt": user_input,
+                    "job_id": job_id
+                },
+                timeout=120
+            )
+
+            if res.status_code != 200:
+                st.error(f"Backend error: {res.status_code}")
+                st.stop()
+
+            # ---------- POLLING RESULT ----------
+            finished = False
+            max_checks = 40
+            checks = 0
+
+            while not finished and checks < max_checks:
+
+                with st.spinner("AI analyzing case..."):
+                    time.sleep(3)
+
+                r = requests.get(
+                    f"{API_BASE}/result/{job_id}",
+                    timeout=30
+                )
+
+                data = r.json()
+
+                if data.get("status") == "completed":
+
+                    result = data.get("result", "No result")
+
+                    placeholder.markdown(result)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": result
+                    })
+
+                    finished = True
+
+                elif data.get("status") == "failed":
+                    st.error("Analysis failed")
+                    finished = True
+                else:
+                    checks += 1
+
+            if not finished:
+                st.error("Timeout waiting for result")
+
         except Exception as e:
-            st.error(f"Не удалось связаться с бэкендом: {e}")
+            st.error(f"Connection error: {e}")
+
